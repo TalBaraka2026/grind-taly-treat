@@ -1,5 +1,4 @@
 import React from 'react';
-import { Image } from '@/components/ui/image';
 import { MapPin } from 'lucide-react';
 
 const VENUE_PHOTO =
@@ -13,16 +12,15 @@ export default function VenueSection() {
     <div className="rounded-2xl overflow-hidden bg-[#241610] ring-1 ring-white/5">
 
       {/* صورة المحل كاملة بدون قص */}
-      <div className="w-full bg-[#241610] flex items-center justify-center">
-        <Image
+      <div className="w-full bg-[#241610]">
+        <img
           src={VENUE_PHOTO}
           alt="GRIND HOUSE - Promenade Jeddah Corniche"
-          className="w-full h-auto object-contain"
-          fittingType="contain"
+          className="block w-full h-auto"
         />
       </div>
 
-      {/* بيانات المحل */}
+      {/* معلومات المحل */}
       <div className="p-5 flex flex-col items-center text-center gap-1.5">
 
         <p className="text-[#F3E9DC] font-semibold text-lg leading-tight">
