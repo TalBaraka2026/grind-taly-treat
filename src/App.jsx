@@ -58,7 +58,7 @@ function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
-        <Router>
+        <Router basename="/grind-taly-treat">
           <ScrollToTop />
           <AuthenticatedApp />
         </Router>
