@@ -19,10 +19,10 @@ export default function CashierPage() {
   const qrToken = searchParams.get('token') || '';
 
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const streamRef = useRef(null);
-  const animationRef = useRef(null);
-  const detectorRef = useRef(null);
-  const scanningLockRef = useRef(false);
+  const scanTimerRef = useRef(null);
+  const jsQrRef = useRef(null);
 
   const [unlocked, setUnlocked] = useState(false);
   const [pin, setPin] = useState('');
@@ -35,11 +35,12 @@ export default function CashierPage() {
 
   const [scanning, setScanning] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [loadingCamera, setLoadingCamera] = useState(false);
 
   const stopScanner = () => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
+    if (scanTimerRef.current) {
+      clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
     }
 
     if (streamRef.current) {
@@ -51,15 +52,14 @@ export default function CashierPage() {
       videoRef.current.srcObject = null;
     }
 
-    detectorRef.current = null;
-    scanningLockRef.current = false;
     setScanning(false);
+    setLoadingCamera(false);
   };
 
   useEffect(() => {
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
       }
 
       if (streamRef.current) {
@@ -68,9 +68,63 @@ export default function CashierPage() {
     };
   }, []);
 
-  const extractToken = (decodedText) => {
+  const loadJsQR = () => {
+    return new Promise((resolve, reject) => {
+      if (window.jsQR) {
+        jsQrRef.current = window.jsQR;
+        resolve(window.jsQR);
+        return;
+      }
+
+      const existing = document.querySelector(
+        'script[data-jsqr="true"]'
+      );
+
+      if (existing) {
+        existing.addEventListener('load', () => {
+          if (window.jsQR) {
+            jsQrRef.current = window.jsQR;
+            resolve(window.jsQR);
+          } else {
+            reject(new Error('jsQR unavailable'));
+          }
+        });
+
+        existing.addEventListener('error', () => {
+          reject(new Error('jsQR failed'));
+        });
+
+        return;
+      }
+
+      const script = document.createElement('script');
+
+      script.src =
+        'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+
+      script.async = true;
+      script.setAttribute('data-jsqr', 'true');
+
+      script.onload = () => {
+        if (window.jsQR) {
+          jsQrRef.current = window.jsQR;
+          resolve(window.jsQR);
+        } else {
+          reject(new Error('jsQR unavailable'));
+        }
+      };
+
+      script.onerror = () => {
+        reject(new Error('jsQR failed'));
+      };
+
+      document.head.appendChild(script);
+    });
+  };
+
+  const extractToken = (value) => {
     try {
-      const url = new URL(decodedText);
+      const url = new URL(value);
 
       const urlToken = url.searchParams.get('token');
 
@@ -78,10 +132,10 @@ export default function CashierPage() {
         return urlToken;
       }
     } catch {
-      // الكود قد يكون GH-XXXXXX مباشرة
+      // الكود نفسه وليس رابطًا
     }
 
-    return decodedText.trim();
+    return value.trim();
   };
 
   const checkCoupon = async (couponToken) => {
@@ -111,31 +165,49 @@ export default function CashierPage() {
     }
   };
 
-  const scanFrame = async () => {
-    if (!scanning || !videoRef.current || !detectorRef.current) {
+  const scanQR = async () => {
+    if (!videoRef.current || !canvasRef.current || !jsQrRef.current) {
       return;
     }
 
-    if (scanningLockRef.current) {
-      animationRef.current = requestAnimationFrame(scanFrame);
+    if (!scanning) {
       return;
     }
 
-    if (videoRef.current.readyState < 2) {
-      animationRef.current = requestAnimationFrame(scanFrame);
-      return;
-    }
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d', {
+      willReadFrequently: true,
+    });
 
-    scanningLockRef.current = true;
+    if (video.readyState >= 2) {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
 
-    try {
-      const codes = await detectorRef.current.detect(videoRef.current);
+      if (width && height) {
+        canvas.width = width;
+        canvas.height = height;
 
-      if (codes && codes.length > 0) {
-        const decodedText = codes[0].rawValue;
+        context.drawImage(video, 0, 0, width, height);
 
-        if (decodedText) {
-          const scannedToken = extractToken(decodedText);
+        const imageData = context.getImageData(
+          0,
+          0,
+          width,
+          height
+        );
+
+        const code = jsQrRef.current(
+          imageData.data,
+          imageData.width,
+          imageData.height,
+          {
+            inversionAttempts: 'attemptBoth',
+          }
+        );
+
+        if (code?.data) {
+          const scannedToken = extractToken(code.data);
 
           stopScanner();
 
@@ -146,36 +218,35 @@ export default function CashierPage() {
           return;
         }
       }
-    } catch {
-      // تجاهل أخطاء الفريمات أثناء المسح
     }
 
-    scanningLockRef.current = false;
-    animationRef.current = requestAnimationFrame(scanFrame);
+    scanTimerRef.current = setTimeout(scanQR, 250);
   };
 
   const startScanner = async () => {
     setCameraError('');
-
-    if (!('BarcodeDetector' in window)) {
-      setCameraError(
-        'المتصفح لا يدعم مسح QR بالكاميرا. جرّب Chrome على الهاتف.'
-      );
-      return;
-    }
+    setLoadingCamera(true);
 
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('camera-not-supported');
+      }
+
+      await loadJsQR();
+
       stopScanner();
-
-      const detector = new window.BarcodeDetector({
-        formats: ['qr_code'],
-      });
-
-      detectorRef.current = detector;
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: {
+            ideal: 'environment',
+          },
+          width: {
+            ideal: 1280,
+          },
+          height: {
+            ideal: 720,
+          },
         },
         audio: false,
       });
@@ -185,30 +256,41 @@ export default function CashierPage() {
       if (!videoRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
-        return;
+        throw new Error('video-not-ready');
       }
 
       videoRef.current.srcObject = stream;
+
       videoRef.current.setAttribute('playsinline', 'true');
+      videoRef.current.setAttribute('autoplay', 'true');
       videoRef.current.muted = true;
 
       await videoRef.current.play();
 
+      setLoadingCamera(false);
       setScanning(true);
 
-      animationRef.current = requestAnimationFrame(scanFrame);
+      setTimeout(() => {
+        scanQR();
+      }, 300);
     } catch (error) {
       stopScanner();
 
       if (error?.name === 'NotAllowedError') {
         setCameraError(
-          'تم رفض إذن الكاميرا. اسمح للمتصفح باستخدام الكاميرا ثم جرّب مرة أخرى.'
+          'الكاميرا مرفوضة. اسمح للمتصفح باستخدام الكاميرا من إعدادات الموقع.'
         );
       } else if (error?.name === 'NotFoundError') {
-        setCameraError('لم يتم العثور على كاميرا في الجهاز.');
+        setCameraError(
+          'لم يتم العثور على كاميرا في الجهاز.'
+        );
+      } else if (error?.message === 'camera-not-supported') {
+        setCameraError(
+          'المتصفح الحالي لا يدعم تشغيل الكاميرا. افتح الموقع باستخدام Google Chrome.'
+        );
       } else {
         setCameraError(
-          'تعذر تشغيل الكاميرا. تأكد من السماح للمتصفح باستخدامها.'
+          'تعذر تشغيل الكاميرا. تأكد من السماح للمتصفح باستخدام الكاميرا ثم حاول مرة أخرى.'
         );
       }
     }
@@ -247,7 +329,9 @@ export default function CashierPage() {
 
       if (res.data.success) {
         navigate('/coupon-success', {
-          state: { coupon: res.data.coupon },
+          state: {
+            coupon: res.data.coupon,
+          },
         });
       } else {
         setResult({
@@ -278,12 +362,6 @@ export default function CashierPage() {
             دخول الكاشير
           </p>
 
-          {qrToken && (
-            <p className="text-[#B8875A] text-sm">
-              تم استقبال كود الكوبون من QR
-            </p>
-          )}
-
           <input
             type="password"
             value={pin}
@@ -300,10 +378,9 @@ export default function CashierPage() {
 
           <button
             type="submit"
-            disabled={checking}
-            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 disabled:opacity-60"
+            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5"
           >
-            {checking ? 'جاري التحقق...' : 'دخول'}
+            دخول
           </button>
         </form>
       </div>
@@ -313,36 +390,36 @@ export default function CashierPage() {
   return (
     <div className="min-h-screen bg-[#160D08] px-6 py-10 flex flex-col items-center">
       <div className="max-w-sm w-full flex flex-col gap-5">
+
         <p className="text-[#F3E9DC] text-lg font-bold text-center">
           التحقق من الكوبون
         </p>
 
-        <form onSubmit={handleCheck} className="flex flex-col gap-3">
-          <input
-            dir="ltr"
-            value={token}
-            onChange={(e) => setToken(e.target.value.toUpperCase())}
-            placeholder="GH-XXXXXX"
-            className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center tracking-widest py-3.5 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
-          />
+        {/* 1 - الكود */}
+        <input
+          dir="ltr"
+          value={token}
+          onChange={(e) =>
+            setToken(e.target.value.toUpperCase())
+          }
+          placeholder="GH-XXXXXX"
+          className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center tracking-widest py-4 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
+        />
 
-          <button
-            type="submit"
-            disabled={checking}
-            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 disabled:opacity-60"
-          >
-            {checking ? 'جاري التحقق...' : 'تحقق'}
-          </button>
-        </form>
-
+        {/* 2 - الكاميرا */}
         <button
           type="button"
           onClick={startScanner}
-          disabled={scanning || checking}
-          className="w-full rounded-full bg-[#2A1810] ring-1 ring-[#E8622D]/40 text-[#F3E9DC] font-semibold py-3.5 flex items-center justify-center gap-2 disabled:opacity-60"
+          disabled={scanning || loadingCamera}
+          className="w-full rounded-full bg-[#2A1810] ring-1 ring-[#E8622D]/50 text-[#F3E9DC] font-semibold py-4 flex items-center justify-center gap-2 disabled:opacity-60"
         >
           <Camera className="w-5 h-5 text-[#E8622D]" />
-          {scanning ? 'جاري مسح QR...' : 'مسح QR بالكاميرا'}
+
+          {loadingCamera
+            ? 'جاري فتح الكاميرا...'
+            : scanning
+            ? 'جاري مسح QR...'
+            : 'مسح QR بالكاميرا'}
         </button>
 
         {cameraError && (
@@ -353,9 +430,25 @@ export default function CashierPage() {
           </div>
         )}
 
+        {/* 3 - التحقق آخر شيء */}
+        <button
+          type="button"
+          onClick={() => checkCoupon(token)}
+          disabled={checking || !token.trim()}
+          className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 disabled:opacity-50"
+        >
+          {checking ? 'جاري التحقق...' : 'تحقق'}
+        </button>
+
+        <canvas
+          ref={canvasRef}
+          className="hidden"
+        />
+
         {scanning && (
           <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-5">
             <div className="w-full max-w-md flex flex-col gap-4">
+
               <div className="flex items-center justify-between">
                 <p className="text-white font-bold text-lg">
                   مسح QR الكوبون
@@ -380,19 +473,21 @@ export default function CashierPage() {
                 />
 
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-64 h-64 border-2 border-white rounded-3xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                  <div className="w-64 h-64 border-2 border-white rounded-3xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
                 </div>
               </div>
 
               <p className="text-white/80 text-sm text-center">
                 وجّه الكاميرا نحو QR الموجود على كوبون العميل
               </p>
+
             </div>
           </div>
         )}
 
         {result && (
           <div className="rounded-3xl bg-[#1E120C] ring-1 ring-white/10 p-6 flex flex-col items-center text-center gap-3">
+
             {result.status === 'active' && (
               <>
                 <ShieldCheck className="w-10 h-10 text-[#4ADE80]" />
@@ -453,9 +548,11 @@ export default function CashierPage() {
                 </p>
               </>
             )}
+
           </div>
         )}
+
       </div>
     </div>
   );
-    }
+        }
