@@ -1,15 +1,52 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, X } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { base44 } from '@/api/base44Client';
+import {
+  ShieldCheck,
+  XCircle,
+  Clock,
+  Ticket,
+  Camera,
+  X,
+} from 'lucide-react';
+
+const CASHIER_PIN = '1234';
 
 export default function CashierPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const qrToken = searchParams.get('token') || '';
+
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const scanTimerRef = useRef(null);
+  const detectorRef = useRef(null);
+  const jsQrRef = useRef(null);
+
+  const [unlocked, setUnlocked] = useState(false);
+  const [pin, setPin] = useState('');
+  const [pinError, setPinError] = useState('');
+
+  const [token, setToken] = useState(qrToken);
+  const [result, setResult] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [error, setError] = useState('');
-  const [starting, setStarting] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [cameraReady, setCameraReady] = useState(false);
 
-  const stopCamera = () => {
+  const stopScanner = () => {
+    if (scanTimerRef.current) {
+      clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+
+    detectorRef.current = null;
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
         track.stop();
@@ -22,11 +59,17 @@ export default function CashierPage() {
       videoRef.current.srcObject = null;
     }
 
+    setCameraReady(false);
+    setCameraLoading(false);
     setCameraOpen(false);
   };
 
   useEffect(() => {
     return () => {
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+      }
+
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => {
           track.stop();
@@ -35,91 +78,476 @@ export default function CashierPage() {
     };
   }, []);
 
-  const startCamera = async () => {
-    setError('');
-    setStarting(true);
+  const extractToken = (value) => {
+    try {
+      const url = new URL(value);
+      const urlToken = url.searchParams.get('token');
+
+      if (urlToken) {
+        return urlToken;
+      }
+    } catch {
+      // QR يحتوي على الكود نفسه
+    }
+
+    return value.trim();
+  };
+
+  const checkCoupon = async (couponToken) => {
+    const cleanToken = couponToken?.trim();
+
+    if (!cleanToken) return;
+
+    setChecking(true);
+    setResult(null);
 
     try {
-      if (!window.isSecureContext) {
-        throw new Error(
-          'الصفحة ليست HTTPS آمنة'
-        );
+      const res = await base44.functions.invoke(
+        'activateCoupon',
+        {
+          token: cleanToken,
+        }
+      );
+
+      setResult({
+        status: res.data.status,
+        coupon: res.data,
+      });
+    } catch {
+      setResult({
+        status: 'not_found',
+        coupon: null,
+      });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const loadJsQR = () => {
+    return new Promise((resolve, reject) => {
+      if (window.jsQR) {
+        jsQrRef.current = window.jsQR;
+        resolve(window.jsQR);
+        return;
       }
 
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          'المتصفح لا يدعم تشغيل الكاميرا'
-        );
-      }
+      const existing = document.querySelector(
+        'script[data-jsqr="true"]'
+      );
 
-      // طلب الكاميرا أولاً
-      const stream =
-        await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: {
-              ideal: 'environment',
-            },
-          },
-          audio: false,
+      if (existing) {
+        existing.addEventListener('load', () => {
+          if (window.jsQR) {
+            jsQrRef.current = window.jsQR;
+            resolve(window.jsQR);
+          } else {
+            reject(new Error('jsQR unavailable'));
+          }
         });
 
-      streamRef.current = stream;
+        existing.addEventListener('error', () => {
+          reject(new Error('jsQR failed'));
+        });
 
-      // إظهار نافذة الكاميرا أولاً
-      setCameraOpen(true);
+        return;
+      }
 
-      // انتظار ظهور عنصر الفيديو
-      setTimeout(async () => {
-        try {
-          if (!videoRef.current) {
-            throw new Error(
-              'لم يظهر عنصر الفيديو'
-            );
-          }
+      const script = document.createElement('script');
 
-          videoRef.current.srcObject = stream;
-          videoRef.current.setAttribute(
-            'playsinline',
-            'true'
+      script.src =
+        'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+
+      script.async = true;
+      script.setAttribute('data-jsqr', 'true');
+
+      script.onload = () => {
+        if (window.jsQR) {
+          jsQrRef.current = window.jsQR;
+          resolve(window.jsQR);
+        } else {
+          reject(new Error('jsQR unavailable'));
+        }
+      };
+
+      script.onerror = () => {
+        reject(new Error('jsQR failed'));
+      };
+
+      document.head.appendChild(script);
+    });
+  };
+
+  const finishScan = async (rawValue) => {
+    const scannedToken = extractToken(rawValue);
+
+    if (!scannedToken) return;
+
+    stopScanner();
+
+    setToken(scannedToken);
+
+    await checkCoupon(scannedToken);
+  };
+
+  const scanWithBarcodeDetector = async () => {
+    if (!detectorRef.current || !videoRef.current) {
+      return;
+    }
+
+    try {
+      if (videoRef.current.readyState >= 2) {
+        const codes =
+          await detectorRef.current.detect(
+            videoRef.current
           );
-          videoRef.current.muted = true;
 
-          await videoRef.current.play();
+        if (codes.length > 0 && codes[0].rawValue) {
+          await finishScan(codes[0].rawValue);
+          return;
+        }
+      }
+    } catch {
+      // نستمر في المحاولة
+    }
 
-          setStarting(false);
-        } catch (err) {
-          setStarting(false);
+    scanTimerRef.current = setTimeout(
+      scanWithBarcodeDetector,
+      250
+    );
+  };
 
-          if (streamRef.current) {
-            streamRef.current
-              .getTracks()
-              .forEach((track) => track.stop());
+  const scanWithJsQR = async () => {
+    if (
+      !videoRef.current ||
+      !canvasRef.current ||
+      !jsQrRef.current ||
+      !cameraReady
+    ) {
+      return;
+    }
 
-            streamRef.current = null;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    const context = canvas.getContext('2d', {
+      willReadFrequently: true,
+    });
+
+    if (video.readyState >= 2) {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+
+      if (width && height) {
+        canvas.width = width;
+        canvas.height = height;
+
+        context.drawImage(
+          video,
+          0,
+          0,
+          width,
+          height
+        );
+
+        const imageData =
+          context.getImageData(
+            0,
+            0,
+            width,
+            height
+          );
+
+        const code = jsQrRef.current(
+          imageData.data,
+          imageData.width,
+          imageData.height,
+          {
+            inversionAttempts: 'attemptBoth',
           }
+        );
 
-          setCameraOpen(false);
+        if (code?.data) {
+          await finishScan(code.data);
+          return;
+        }
+      }
+    }
 
-          setError(
-            `اسم الخطأ: ${err?.name || 'Error'}\n\n` +
-            `التفاصيل: ${
-              err?.message || 'خطأ غير معروف'
+    scanTimerRef.current = setTimeout(
+      scanWithJsQR,
+      250
+    );
+  };
+
+  /*
+   * الكاميرا تفتح بعد ظهور نافذة الكاميرا فعليًا.
+   * ده مهم لأننا اختبرنا إن الطريقة دي هي اللي بتشتغل على الجهاز.
+   */
+  useEffect(() => {
+    if (!cameraOpen) return;
+
+    let cancelled = false;
+
+    const startCamera = async () => {
+      setCameraLoading(true);
+      setCameraError('');
+
+      try {
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia
+        ) {
+          throw new Error(
+            'المتصفح لا يدعم تشغيل الكاميرا'
+          );
+        }
+
+        const stream =
+          await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: {
+                ideal: 'environment',
+              },
+              width: {
+                ideal: 1280,
+              },
+              height: {
+                ideal: 720,
+              },
+            },
+            audio: false,
+          });
+
+        if (cancelled) {
+          stream.getTracks().forEach((track) => {
+            track.stop();
+          });
+          return;
+        }
+
+        streamRef.current = stream;
+
+        if (!videoRef.current) {
+          throw new Error(
+            'عنصر الفيديو غير موجود'
+          );
+        }
+
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute(
+          'playsinline',
+          'true'
+        );
+        videoRef.current.setAttribute(
+          'autoplay',
+          'true'
+        );
+        videoRef.current.muted = true;
+
+        await videoRef.current.play();
+
+        if (cancelled) return;
+
+        setCameraLoading(false);
+        setCameraReady(true);
+
+        /*
+         * نحاول أولًا استخدام قارئ QR المدمج
+         * في المتصفح.
+         */
+        if ('BarcodeDetector' in window) {
+          try {
+            const supported =
+              await BarcodeDetector.getSupportedFormats();
+
+            if (supported.includes('qr_code')) {
+              detectorRef.current =
+                new BarcodeDetector({
+                  formats: ['qr_code'],
+                });
+
+              scanTimerRef.current =
+                setTimeout(
+                  scanWithBarcodeDetector,
+                  300
+                );
+
+              return;
+            }
+          } catch {
+            detectorRef.current = null;
+          }
+        }
+
+        /*
+         * بديل للمتصفحات التي لا تدعم
+         * BarcodeDetector.
+         */
+        try {
+          await loadJsQR();
+
+          if (!cancelled) {
+            scanTimerRef.current =
+              setTimeout(
+                scanWithJsQR,
+                300
+              );
+          }
+        } catch {
+          setCameraError(
+            'الكاميرا تعمل، لكن قارئ QR غير متوفر. جرّب Google Chrome.'
+          );
+        }
+      } catch (error) {
+        if (cancelled) return;
+
+        if (error?.name === 'NotAllowedError') {
+          setCameraError(
+            'تم رفض الوصول إلى الكاميرا من المتصفح.'
+          );
+        } else if (
+          error?.name === 'NotReadableError'
+        ) {
+          setCameraError(
+            'الكاميرا مستخدمة حاليًا بواسطة تطبيق أو نافذة أخرى.'
+          );
+        } else if (
+          error?.name === 'NotFoundError'
+        ) {
+          setCameraError(
+            'لم يتم العثور على كاميرا في الجهاز.'
+          );
+        } else {
+          setCameraError(
+            `تعذر تشغيل الكاميرا: ${
+              error?.message || 'خطأ غير معروف'
             }`
           );
         }
-      }, 300);
 
-    } catch (err) {
-      setStarting(false);
+        if (streamRef.current) {
+          streamRef.current
+            .getTracks()
+            .forEach((track) => track.stop());
 
-      setError(
-        `اسم الخطأ: ${err?.name || 'Error'}\n\n` +
-        `التفاصيل: ${
-          err?.message || 'خطأ غير معروف'
-        }`
-      );
+          streamRef.current = null;
+        }
+
+        setCameraLoading(false);
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      cancelled = true;
+
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = null;
+      }
+    };
+  }, [cameraOpen]);
+
+  const openCamera = () => {
+    setCameraError('');
+    setCameraReady(false);
+    setCameraOpen(true);
+  };
+
+  const handlePinSubmit = async (e) => {
+    e.preventDefault();
+
+    if (pin !== CASHIER_PIN) {
+      setPinError('رمز غير صحيح');
+      return;
+    }
+
+    setUnlocked(true);
+    setPinError('');
+
+    if (qrToken) {
+      await checkCoupon(qrToken);
     }
   };
+
+  const handleConfirm = async () => {
+    if (!result?.coupon) return;
+
+    setConfirming(true);
+
+    try {
+      const res = await base44.functions.invoke(
+        'redeemCoupon',
+        {
+          token: result.coupon.token,
+        }
+      );
+
+      if (res.data.success) {
+        navigate('/coupon-success', {
+          state: {
+            coupon: res.data.coupon,
+          },
+        });
+      } else {
+        setResult({
+          status: res.data.coupon.status,
+          coupon: res.data.coupon,
+        });
+      }
+    } catch {
+      setResult({
+        status: 'not_found',
+        coupon: null,
+      });
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  if (!unlocked) {
+    return (
+      <div
+        dir="rtl"
+        className="min-h-screen bg-[#160D08] flex items-center justify-center px-6"
+      >
+        <form
+          onSubmit={handlePinSubmit}
+          className="max-w-sm w-full rounded-3xl bg-[#1E120C] ring-1 ring-white/10 p-8 flex flex-col items-center gap-4 text-center"
+        >
+          <ShieldCheck className="w-10 h-10 text-[#E8622D]" />
+
+          <p className="text-[#F3E9DC] text-lg font-bold">
+            دخول الكاشير
+          </p>
+
+          <input
+            type="password"
+            value={pin}
+            onChange={(e) =>
+              setPin(e.target.value)
+            }
+            placeholder="رمز الدخول"
+            className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center py-3 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
+          />
+
+          {pinError && (
+            <p className="text-[#E8622D] text-sm">
+              {pinError}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5"
+          >
+            دخول
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -128,30 +556,53 @@ export default function CashierPage() {
     >
       <div className="max-w-sm w-full flex flex-col gap-5">
 
-        <h1 className="text-[#F3E9DC] text-2xl font-bold text-center">
-          اختبار كاميرا الكاشير
-        </h1>
+        <p className="text-[#F3E9DC] text-lg font-bold text-center">
+          التحقق من الكوبون
+        </p>
 
+        {/* الكود */}
+        <input
+          dir="ltr"
+          value={token}
+          onChange={(e) =>
+            setToken(
+              e.target.value.toUpperCase()
+            )
+          }
+          placeholder="GH-XXXXXX"
+          className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center tracking-widest py-4 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
+        />
+
+        {/* الكاميرا */}
         <button
-          onClick={startCamera}
-          disabled={starting}
-          className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 flex items-center justify-center gap-2 disabled:opacity-60"
+          type="button"
+          onClick={openCamera}
+          className="w-full rounded-full bg-[#2A1810] ring-1 ring-[#E8622D]/50 text-[#F3E9DC] font-semibold py-4 flex items-center justify-center gap-2"
         >
-          <Camera className="w-5 h-5" />
-
-          {starting
-            ? 'جاري تشغيل الكاميرا...'
-            : 'تشغيل الكاميرا'}
+          <Camera className="w-5 h-5 text-[#E8622D]" />
+          مسح QR بالكاميرا
         </button>
 
-        {error && (
-          <div className="rounded-2xl bg-[#2A1810] ring-1 ring-red-500/30 p-5">
-            <p className="text-red-400 text-sm whitespace-pre-line text-center">
-              {error}
-            </p>
-          </div>
-        )}
+        {/* التحقق */}
+        <button
+          type="button"
+          onClick={() => checkCoupon(token)}
+          disabled={
+            checking || !token.trim()
+          }
+          className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 disabled:opacity-50"
+        >
+          {checking
+            ? 'جاري التحقق...'
+            : 'تحقق'}
+        </button>
 
+        <canvas
+          ref={canvasRef}
+          className="hidden"
+        />
+
+        {/* نافذة الكاميرا */}
         {cameraOpen && (
           <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-5">
 
@@ -163,14 +614,16 @@ export default function CashierPage() {
                 </p>
 
                 <button
-                  onClick={stopCamera}
+                  type="button"
+                  onClick={stopScanner}
                   className="w-11 h-11 rounded-full bg-white/10 flex items-center justify-center"
                 >
                   <X className="w-6 h-6 text-white" />
                 </button>
               </div>
 
-              <div className="overflow-hidden rounded-3xl ring-2 ring-[#E8622D] bg-black">
+              <div className="relative overflow-hidden rounded-3xl bg-black ring-2 ring-[#E8622D]">
+
                 <video
                   ref={videoRef}
                   autoPlay
@@ -178,17 +631,108 @@ export default function CashierPage() {
                   muted
                   className="w-full aspect-[3/4] object-cover"
                 />
+
+                {!cameraReady &&
+                  !cameraError && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                      <p className="text-white">
+                        جاري تشغيل الكاميرا...
+                      </p>
+                    </div>
+                  )}
+
+                {cameraReady && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-64 h-64 border-2 border-white rounded-3xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
+                  </div>
+                )}
               </div>
 
-              <p className="text-white text-center">
-                الكاميرا تعمل بنجاح
-              </p>
+              {cameraError ? (
+                <div className="rounded-2xl bg-[#2A1810] p-4">
+                  <p className="text-red-400 text-sm text-center">
+                    {cameraError}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-white/80 text-sm text-center">
+                  وجّه الكاميرا نحو QR الموجود على كوبون العميل
+                </p>
+              )}
 
             </div>
+          </div>
+        )}
+
+        {/* نتيجة التحقق */}
+        {result && (
+          <div className="rounded-3xl bg-[#1E120C] ring-1 ring-white/10 p-6 flex flex-col items-center text-center gap-3">
+
+            {result.status === 'active' && (
+              <>
+                <ShieldCheck className="w-10 h-10 text-[#4ADE80]" />
+
+                <p className="text-[#4ADE80] font-bold text-lg">
+                  الكوبون صالح
+                </p>
+
+                <p className="text-[#E8622D] text-3xl font-bold">
+                  خصم 15%
+                </p>
+
+                <p
+                  dir="ltr"
+                  className="text-[#8A7862] text-sm tracking-wider"
+                >
+                  {result.coupon.token}
+                </p>
+
+                <button
+                  onClick={handleConfirm}
+                  disabled={confirming}
+                  className="mt-2 w-full rounded-full bg-[#4ADE80] text-[#0F1B12] font-semibold py-3.5 disabled:opacity-60"
+                >
+                  {confirming
+                    ? 'جاري التأكيد...'
+                    : 'تأكيد استخدام الخصم'}
+                </button>
+              </>
+            )}
+
+            {result.status === 'expired' && (
+              <>
+                <Clock className="w-10 h-10 text-[#B8875A]" />
+
+                <p className="text-[#B8875A] font-bold text-lg">
+                  الكوبون منتهي الصلاحية
+                </p>
+              </>
+            )}
+
+            {result.status === 'used' && (
+              <>
+                <Ticket className="w-10 h-10 text-[#B8875A]" />
+
+                <p className="text-[#B8875A] font-bold text-lg">
+                  تم استخدام هذا الكوبون مسبقًا
+                </p>
+              </>
+            )}
+
+            {result.status === 'not_found' && (
+              <>
+                <XCircle className="w-10 h-10 text-[#EF4444]" />
+
+                <p className="text-[#EF4444] font-bold text-lg">
+                  كوبون غير موجود
+                </p>
+              </>
+            )}
+
           </div>
         )}
 
       </div>
     </div>
   );
-              }
+    }
