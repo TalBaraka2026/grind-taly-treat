@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 
 export default function CashierPage() {
@@ -7,10 +7,14 @@ export default function CashierPage() {
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [error, setError] = useState('');
+  const [starting, setStarting] = useState(false);
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current.getTracks().forEach((track) => {
+        track.stop();
+      });
+
       streamRef.current = null;
     }
 
@@ -21,51 +25,98 @@ export default function CashierPage() {
     setCameraOpen(false);
   };
 
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+    };
+  }, []);
+
   const startCamera = async () => {
     setError('');
+    setStarting(true);
 
     try {
       if (!window.isSecureContext) {
         throw new Error(
-          'الصفحة ليست في وضع HTTPS الآمن'
+          'الصفحة ليست HTTPS آمنة'
         );
       }
 
-      if (!navigator.mediaDevices) {
+      if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(
-          'navigator.mediaDevices غير متوفر في المتصفح'
+          'المتصفح لا يدعم تشغيل الكاميرا'
         );
       }
 
-      if (!navigator.mediaDevices.getUserMedia) {
-        throw new Error(
-          'getUserMedia غير مدعوم في هذا المتصفح'
-        );
-      }
-
+      // طلب الكاميرا أولاً
       const stream =
         await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: {
+            facingMode: {
+              ideal: 'environment',
+            },
+          },
           audio: false,
         });
 
       streamRef.current = stream;
 
-      if (!videoRef.current) {
-        throw new Error(
-          'عنصر الفيديو غير موجود'
-        );
-      }
-
-      videoRef.current.srcObject = stream;
-
-      await videoRef.current.play();
-
+      // إظهار نافذة الكاميرا أولاً
       setCameraOpen(true);
+
+      // انتظار ظهور عنصر الفيديو
+      setTimeout(async () => {
+        try {
+          if (!videoRef.current) {
+            throw new Error(
+              'لم يظهر عنصر الفيديو'
+            );
+          }
+
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute(
+            'playsinline',
+            'true'
+          );
+          videoRef.current.muted = true;
+
+          await videoRef.current.play();
+
+          setStarting(false);
+        } catch (err) {
+          setStarting(false);
+
+          if (streamRef.current) {
+            streamRef.current
+              .getTracks()
+              .forEach((track) => track.stop());
+
+            streamRef.current = null;
+          }
+
+          setCameraOpen(false);
+
+          setError(
+            `اسم الخطأ: ${err?.name || 'Error'}\n\n` +
+            `التفاصيل: ${
+              err?.message || 'خطأ غير معروف'
+            }`
+          );
+        }
+      }, 300);
+
     } catch (err) {
+      setStarting(false);
+
       setError(
-        `اسم الخطأ: ${err?.name || 'غير معروف'}\n\n` +
-        `التفاصيل: ${err?.message || 'لا توجد تفاصيل'}`
+        `اسم الخطأ: ${err?.name || 'Error'}\n\n` +
+        `التفاصيل: ${
+          err?.message || 'خطأ غير معروف'
+        }`
       );
     }
   };
@@ -83,10 +134,14 @@ export default function CashierPage() {
 
         <button
           onClick={startCamera}
-          className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 flex items-center justify-center gap-2"
+          disabled={starting}
+          className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 flex items-center justify-center gap-2 disabled:opacity-60"
         >
           <Camera className="w-5 h-5" />
-          تشغيل الكاميرا
+
+          {starting
+            ? 'جاري تشغيل الكاميرا...'
+            : 'تشغيل الكاميرا'}
         </button>
 
         {error && (
@@ -102,14 +157,20 @@ export default function CashierPage() {
 
             <div className="w-full max-w-md flex flex-col gap-4">
 
-              <button
-                onClick={stopCamera}
-                className="self-end w-11 h-11 rounded-full bg-white/10 flex items-center justify-center"
-              >
-                <X className="w-6 h-6 text-white" />
-              </button>
+              <div className="flex items-center justify-between">
+                <p className="text-white font-bold text-lg">
+                  كاميرا الكاشير
+                </p>
 
-              <div className="overflow-hidden rounded-3xl ring-2 ring-[#E8622D]">
+                <button
+                  onClick={stopCamera}
+                  className="w-11 h-11 rounded-full bg-white/10 flex items-center justify-center"
+                >
+                  <X className="w-6 h-6 text-white" />
+                </button>
+              </div>
+
+              <div className="overflow-hidden rounded-3xl ring-2 ring-[#E8622D] bg-black">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -130,4 +191,4 @@ export default function CashierPage() {
       </div>
     </div>
   );
-}
+              }
