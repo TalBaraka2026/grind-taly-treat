@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 
 const CASHIER_PIN = '1234';
+const LOGIN_KEY = 'cashier_login';
+const LOGIN_DURATION = 24 * 60 * 60 * 1000;
 
 export default function CashierPage() {
   const [searchParams] = useSearchParams();
@@ -25,7 +27,29 @@ export default function CashierPage() {
   const detectorRef = useRef(null);
   const jsQrRef = useRef(null);
 
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      const saved = localStorage.getItem(LOGIN_KEY);
+
+      if (!saved) return false;
+
+      const data = JSON.parse(saved);
+
+      if (
+        data?.expiresAt &&
+        Date.now() < data.expiresAt
+      ) {
+        return true;
+      }
+
+      localStorage.removeItem(LOGIN_KEY);
+      return false;
+    } catch {
+      localStorage.removeItem(LOGIN_KEY);
+      return false;
+    }
+  });
+
   const [pin, setPin] = useState('');
   const [pinError, setPinError] = useState('');
 
@@ -201,7 +225,10 @@ export default function CashierPage() {
             videoRef.current
           );
 
-        if (codes.length > 0 && codes[0].rawValue) {
+        if (
+          codes.length > 0 &&
+          codes[0].rawValue
+        ) {
           await finishScan(codes[0].rawValue);
           return;
         }
@@ -220,8 +247,7 @@ export default function CashierPage() {
     if (
       !videoRef.current ||
       !canvasRef.current ||
-      !jsQrRef.current ||
-      !cameraReady
+      !jsQrRef.current
     ) {
       return;
     }
@@ -280,8 +306,7 @@ export default function CashierPage() {
   };
 
   /*
-   * الكاميرا تفتح بعد ظهور نافذة الكاميرا فعليًا.
-   * ده مهم لأننا اختبرنا إن الطريقة دي هي اللي بتشتغل على الجهاز.
+   * تشغيل الكاميرا بعد ظهور نافذة الكاميرا
    */
   useEffect(() => {
     if (!cameraOpen) return;
@@ -322,6 +347,7 @@ export default function CashierPage() {
           stream.getTracks().forEach((track) => {
             track.stop();
           });
+
           return;
         }
 
@@ -334,14 +360,17 @@ export default function CashierPage() {
         }
 
         videoRef.current.srcObject = stream;
+
         videoRef.current.setAttribute(
           'playsinline',
           'true'
         );
+
         videoRef.current.setAttribute(
           'autoplay',
           'true'
         );
+
         videoRef.current.muted = true;
 
         await videoRef.current.play();
@@ -352,15 +381,16 @@ export default function CashierPage() {
         setCameraReady(true);
 
         /*
-         * نحاول أولًا استخدام قارئ QR المدمج
-         * في المتصفح.
+         * قارئ QR المدمج في المتصفح
          */
         if ('BarcodeDetector' in window) {
           try {
             const supported =
               await BarcodeDetector.getSupportedFormats();
 
-            if (supported.includes('qr_code')) {
+            if (
+              supported.includes('qr_code')
+            ) {
               detectorRef.current =
                 new BarcodeDetector({
                   formats: ['qr_code'],
@@ -380,8 +410,7 @@ export default function CashierPage() {
         }
 
         /*
-         * بديل للمتصفحات التي لا تدعم
-         * BarcodeDetector.
+         * بديل للمتصفحات الأخرى
          */
         try {
           await loadJsQR();
@@ -401,7 +430,9 @@ export default function CashierPage() {
       } catch (error) {
         if (cancelled) return;
 
-        if (error?.name === 'NotAllowedError') {
+        if (
+          error?.name === 'NotAllowedError'
+        ) {
           setCameraError(
             'تم رفض الوصول إلى الكاميرا من المتصفح.'
           );
@@ -420,7 +451,8 @@ export default function CashierPage() {
         } else {
           setCameraError(
             `تعذر تشغيل الكاميرا: ${
-              error?.message || 'خطأ غير معروف'
+              error?.message ||
+              'خطأ غير معروف'
             }`
           );
         }
@@ -455,6 +487,9 @@ export default function CashierPage() {
     setCameraOpen(true);
   };
 
+  /*
+   * تسجيل دخول الكاشير لمدة 24 ساعة
+   */
   const handlePinSubmit = async (e) => {
     e.preventDefault();
 
@@ -462,6 +497,16 @@ export default function CashierPage() {
       setPinError('رمز غير صحيح');
       return;
     }
+
+    const expiresAt =
+      Date.now() + LOGIN_DURATION;
+
+    localStorage.setItem(
+      LOGIN_KEY,
+      JSON.stringify({
+        expiresAt,
+      })
+    );
 
     setUnlocked(true);
     setPinError('');
@@ -506,6 +551,9 @@ export default function CashierPage() {
     }
   };
 
+  /*
+   * شاشة الدخول
+   */
   if (!unlocked) {
     return (
       <div
@@ -544,11 +592,18 @@ export default function CashierPage() {
           >
             دخول
           </button>
+
+          <p className="text-[#8A7862] text-xs">
+            تسجيل الدخول صالح لمدة 24 ساعة على هذا الجهاز
+          </p>
         </form>
       </div>
     );
   }
 
+  /*
+   * صفحة الكاشير
+   */
   return (
     <div
       dir="rtl"
@@ -560,7 +615,7 @@ export default function CashierPage() {
           التحقق من الكوبون
         </p>
 
-        {/* الكود */}
+        {/* 1 - الكود */}
         <input
           dir="ltr"
           value={token}
@@ -573,22 +628,26 @@ export default function CashierPage() {
           className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center tracking-widest py-4 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
         />
 
-        {/* الكاميرا */}
+        {/* 2 - الكاميرا */}
         <button
           type="button"
           onClick={openCamera}
           className="w-full rounded-full bg-[#2A1810] ring-1 ring-[#E8622D]/50 text-[#F3E9DC] font-semibold py-4 flex items-center justify-center gap-2"
         >
           <Camera className="w-5 h-5 text-[#E8622D]" />
+
           مسح QR بالكاميرا
         </button>
 
-        {/* التحقق */}
+        {/* 3 - التحقق */}
         <button
           type="button"
-          onClick={() => checkCoupon(token)}
+          onClick={() =>
+            checkCoupon(token)
+          }
           disabled={
-            checking || !token.trim()
+            checking ||
+            !token.trim()
           }
           className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 disabled:opacity-50"
         >
@@ -646,6 +705,7 @@ export default function CashierPage() {
                     <div className="w-64 h-64 border-2 border-white rounded-3xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
                   </div>
                 )}
+
               </div>
 
               {cameraError ? (
@@ -735,4 +795,4 @@ export default function CashierPage() {
       </div>
     </div>
   );
-    }
+}
