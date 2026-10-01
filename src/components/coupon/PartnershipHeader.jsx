@@ -6,18 +6,32 @@ const GRINDHOUSE_LOGO = 'https://media.base44.com/images/public/user_6abd3b553ef
 
 export default function PartnershipHeader({ compact = false }) {
   const size = compact ? 'w-14 h-14' : 'w-20 h-20 sm:w-24 sm:h-24';
+
   return (
     <div className="flex flex-col items-center gap-3">
       {!compact && (
-        <p className="text-[13px] tracking-widest text-[#B8875A] font-medium">بالتعاون بين</p>
+        <p className="text-[13px] tracking-widest text-[#B8875A] font-medium">
+          بالتعاون مع
+        </p>
       )}
+
       <div className="flex items-center justify-center gap-4 sm:gap-6">
         <div className={`${size} rounded-full bg-white shadow-sm ring-1 ring-black/5 overflow-hidden flex items-center justify-center`}>
-          <Image src={TALY_LOGO} alt="تالي البركة لألعاب الأطفال" className="w-full h-full" fittingType="fit" />
+          <Image
+            src={TALY_LOGO}
+            alt="تال البركة"
+            className="w-full h-full"
+            fittingType="fit"
+          />
         </div>
-        <span className="text-[#B8875A] text-lg font-light">×</span>
+
         <div className={`${size} rounded-full bg-white shadow-sm ring-1 ring-black/5 overflow-hidden flex items-center justify-center`}>
-          <Image src={GRINDHOUSE_LOGO} alt="GRIND HOUSE COFFEE & COOKIES" className="w-full h-full" fittingType="fit" />
+          <Image
+            src={GRINDHOUSE_LOGO}
+            alt="GRIND HOUSE"
+            className="w-full h-full"
+            fittingType="fit"
+          />
         </div>
       </div>
     </div>
