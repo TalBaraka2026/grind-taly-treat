@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PartnershipHeader from '@/components/coupon/PartnershipHeader';
 import VenueSection from '@/components/coupon/VenueSection';
@@ -9,42 +9,71 @@ const PROMO_IMAGE =
 
 export default function Home() {
   const navigate = useNavigate();
+
   const [showPromo, setShowPromo] = useState(true);
+  const [animateImage, setAnimateImage] = useState(false);
+
+  useEffect(() => {
+    // تشغيل حركة الصورة
+    const startAnimation = setTimeout(() => {
+      setAnimateImage(true);
+    }, 100);
+
+    // إخفاء العرض تلقائيًا
+    const closePromo = setTimeout(() => {
+      setShowPromo(false);
+    }, 3500);
+
+    return () => {
+      clearTimeout(startAnimation);
+      clearTimeout(closePromo);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#160D08] pb-24">
 
-      {/* الواجهة الافتتاحية */}
+      {/* شاشة العرض الافتتاحية */}
       {showPromo && (
-        <div className="fixed inset-0 z-[9999] bg-black/95 flex flex-col items-center justify-center p-4">
+        <div className="fixed inset-0 z-[9999] bg-black/95 flex items-center justify-center p-4">
 
-          <div className="relative w-full max-w-md">
+          <div className="w-full max-w-md text-center">
 
-            {/* زر الإغلاق */}
-            <button
-              onClick={() => setShowPromo(false)}
-              className="absolute -top-3 -right-3 z-10 w-10 h-10 rounded-full bg-[#241610] text-white text-2xl flex items-center justify-center ring-1 ring-white/20 shadow-lg"
-              aria-label="إغلاق"
+            {/* الصورة المتحركة */}
+            <div
+              className="rounded-3xl overflow-hidden shadow-2xl ring-1 ring-white/10 bg-[#241610]"
+              style={{
+                opacity: animateImage ? 1 : 0,
+                transform: animateImage
+                  ? 'scale(1)'
+                  : 'scale(0.82)',
+                transition:
+                  'opacity 900ms ease-out, transform 1200ms cubic-bezier(0.16, 1, 0.3, 1)',
+              }}
             >
-              ×
-            </button>
-
-            {/* الصورة */}
-            <div className="rounded-3xl overflow-hidden shadow-2xl ring-1 ring-white/10 bg-[#241610]">
               <img
                 src={PROMO_IMAGE}
-                alt="عرض خصم 15% من GRIND HOUSE لعملاء تالي البركة"
+                alt="عرض خصم 15% من GRIND HOUSE بالتعاون مع شركة تالي البركة لألعاب الأطفال"
                 className="block w-full h-auto"
               />
             </div>
 
-            {/* زر الدخول */}
-            <button
-              onClick={() => setShowPromo(false)}
-              className="w-full mt-4 rounded-full bg-[#E8622D] text-white font-bold py-4 text-lg shadow-lg active:scale-[0.98] transition-transform"
+            {/* اسم الشراكة */}
+            <div
+              className="mt-4"
+              style={{
+                opacity: animateImage ? 1 : 0,
+                transform: animateImage
+                  ? 'translateY(0)'
+                  : 'translateY(15px)',
+                transition:
+                  'opacity 700ms ease-out 500ms, transform 700ms ease-out 500ms',
+              }}
             >
-              دخول للموقع
-            </button>
+              <p className="text-[#F3E9DC] text-base font-semibold">
+                بالتعاون مع شركة تالي البركة لألعاب الأطفال
+              </p>
+            </div>
 
           </div>
         </div>
@@ -52,9 +81,11 @@ export default function Home() {
 
       {/* الصفحة الرئيسية */}
       <div className="max-w-md mx-auto px-5 pt-10 flex flex-col gap-8">
+
         <PartnershipHeader />
 
         <div className="text-center space-y-2">
+
           <p className="text-[#F3E9DC] text-2xl font-bold leading-snug">
             عرض خاص لعملاء تالي البركة
           </p>
@@ -66,9 +97,11 @@ export default function Home() {
           <p className="text-[#8A7862] text-sm mt-1">
             بالتعاون مع تالي البركة لألعاب الأطفال
           </p>
+
         </div>
 
         <div className="flex flex-col gap-3">
+
           <button
             onClick={() => navigate('/coupon')}
             className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4 active:scale-[0.98] transition-transform"
@@ -82,12 +115,15 @@ export default function Home() {
           >
             عرض المنيو
           </button>
+
         </div>
 
         <VenueSection />
+
       </div>
 
       <BottomNav />
+
     </div>
   );
-}
+            }
