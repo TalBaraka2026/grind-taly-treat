@@ -23,6 +23,7 @@ export default function CashierPage() {
   const streamRef = useRef(null);
   const scanTimerRef = useRef(null);
   const jsQrRef = useRef(null);
+  const detectorRef = useRef(null);
 
   const [unlocked, setUnlocked] = useState(false);
   const [pin, setPin] = useState('');
@@ -67,6 +68,21 @@ export default function CashierPage() {
       }
     };
   }, []);
+
+  const extractToken = (value) => {
+    try {
+      const url = new URL(value);
+      const urlToken = url.searchParams.get('token');
+
+      if (urlToken) {
+        return urlToken;
+      }
+    } catch {
+      // QR يحتوي على الكود مباشرة
+    }
+
+    return value.trim();
+  };
 
   const loadJsQR = () => {
     return new Promise((resolve, reject) => {
@@ -122,22 +138,6 @@ export default function CashierPage() {
     });
   };
 
-  const extractToken = (value) => {
-    try {
-      const url = new URL(value);
-
-      const urlToken = url.searchParams.get('token');
-
-      if (urlToken) {
-        return urlToken;
-      }
-    } catch {
-      // الكود نفسه وليس رابطًا
-    }
-
-    return value.trim();
-  };
-
   const checkCoupon = async (couponToken) => {
     const cleanToken = couponToken?.trim();
 
@@ -165,17 +165,49 @@ export default function CashierPage() {
     }
   };
 
-  const scanQR = async () => {
+  const scanWithBarcodeDetector = async () => {
+    if (!detectorRef.current || !videoRef.current) return;
+
+    const video = videoRef.current;
+
+    try {
+      if (video.readyState >= 2) {
+        const codes = await detectorRef.current.detect(video);
+
+        if (codes.length > 0 && codes[0].rawValue) {
+          const scannedToken = extractToken(codes[0].rawValue);
+
+          stopScanner();
+
+          setToken(scannedToken);
+
+          await checkCoupon(scannedToken);
+
+          return;
+        }
+      }
+    } catch {
+      // نكمل المحاولة
+    }
+
+    if (scanning) {
+      scanTimerRef.current = setTimeout(
+        scanWithBarcodeDetector,
+        300
+      );
+    }
+  };
+
+  const scanWithJsQR = async () => {
     if (!videoRef.current || !canvasRef.current || !jsQrRef.current) {
       return;
     }
 
-    if (!scanning) {
-      return;
-    }
+    if (!scanning) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
+
     const context = canvas.getContext('2d', {
       willReadFrequently: true,
     });
@@ -220,7 +252,7 @@ export default function CashierPage() {
       }
     }
 
-    scanTimerRef.current = setTimeout(scanQR, 250);
+    scanTimerRef.current = setTimeout(scanWithJsQR, 300);
   };
 
   const startScanner = async () => {
@@ -232,10 +264,9 @@ export default function CashierPage() {
         throw new Error('camera-not-supported');
       }
 
-      await loadJsQR();
-
-      stopScanner();
-
+      /*
+       * تشغيل الكاميرا أولاً
+       */
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: {
@@ -260,7 +291,6 @@ export default function CashierPage() {
       }
 
       videoRef.current.srcObject = stream;
-
       videoRef.current.setAttribute('playsinline', 'true');
       videoRef.current.setAttribute('autoplay', 'true');
       videoRef.current.muted = true;
@@ -270,19 +300,68 @@ export default function CashierPage() {
       setLoadingCamera(false);
       setScanning(true);
 
-      setTimeout(() => {
-        scanQR();
-      }, 300);
+      /*
+       * لو المتصفح يدعم BarcodeDetector
+       * نستخدمه مباشرة بدون أي مكتبة خارجية
+       */
+      if ('BarcodeDetector' in window) {
+        try {
+          let formats = ['qr_code'];
+
+          if (BarcodeDetector.getSupportedFormats) {
+            const supported =
+              await BarcodeDetector.getSupportedFormats();
+
+            if (supported.includes('qr_code')) {
+              formats = ['qr_code'];
+            }
+          }
+
+          detectorRef.current = new BarcodeDetector({
+            formats,
+          });
+
+          setTimeout(() => {
+            scanWithBarcodeDetector();
+          }, 500);
+
+          return;
+        } catch {
+          detectorRef.current = null;
+        }
+      }
+
+      /*
+       * لو BarcodeDetector غير متوفر
+       * نستخدم jsQR كبديل
+       */
+      try {
+        await loadJsQR();
+
+        setTimeout(() => {
+          scanWithJsQR();
+        }, 500);
+      } catch {
+        stopScanner();
+
+        setCameraError(
+          'الكاميرا تعمل، لكن قارئ QR غير متوفر في هذا المتصفح. جرّب فتح الموقع من Google Chrome.'
+        );
+      }
     } catch (error) {
       stopScanner();
 
       if (error?.name === 'NotAllowedError') {
         setCameraError(
-          'الكاميرا مرفوضة. اسمح للمتصفح باستخدام الكاميرا من إعدادات الموقع.'
+          'الكاميرا مرفوضة من المتصفح. اسمح للمتصفح باستخدام الكاميرا ثم حاول مرة أخرى.'
         );
       } else if (error?.name === 'NotFoundError') {
         setCameraError(
           'لم يتم العثور على كاميرا في الجهاز.'
+        );
+      } else if (error?.name === 'NotReadableError') {
+        setCameraError(
+          'الكاميرا مستخدمة حاليًا بواسطة تطبيق أو نافذة أخرى.'
         );
       } else if (error?.message === 'camera-not-supported') {
         setCameraError(
@@ -310,11 +389,6 @@ export default function CashierPage() {
     if (qrToken) {
       await checkCoupon(qrToken);
     }
-  };
-
-  const handleCheck = async (e) => {
-    e.preventDefault();
-    await checkCoupon(token);
   };
 
   const handleConfirm = async () => {
@@ -395,7 +469,7 @@ export default function CashierPage() {
           التحقق من الكوبون
         </p>
 
-        {/* 1 - الكود */}
+        {/* الكود أولاً */}
         <input
           dir="ltr"
           value={token}
@@ -406,7 +480,7 @@ export default function CashierPage() {
           className="w-full rounded-full bg-[#241610] ring-1 ring-white/5 text-[#F3E9DC] text-center tracking-widest py-4 placeholder:text-[#8A7862] focus:outline-none focus:ring-[#E8622D]"
         />
 
-        {/* 2 - الكاميرا */}
+        {/* الكاميرا ثانيًا */}
         <button
           type="button"
           onClick={startScanner}
@@ -430,7 +504,7 @@ export default function CashierPage() {
           </div>
         )}
 
-        {/* 3 - التحقق آخر شيء */}
+        {/* التحقق آخر شيء */}
         <button
           type="button"
           onClick={() => checkCoupon(token)}
@@ -445,6 +519,7 @@ export default function CashierPage() {
           className="hidden"
         />
 
+        {/* شاشة الكاميرا */}
         {scanning && (
           <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-5">
             <div className="w-full max-w-md flex flex-col gap-4">
@@ -555,4 +630,4 @@ export default function CashierPage() {
       </div>
     </div>
   );
-        }
+}
