@@ -47,16 +47,17 @@ export default function CashierPage() {
   const handlePinSubmit = async (e) => {
     e.preventDefault();
 
-    if (pin === CASHIER_PIN) {
-      setUnlocked(true);
-      setPinError('');
-
-      // لو دخل الكاشير عن طريق QR، يتم التحقق تلقائيًا
-      if (qrToken) {
-        await checkCoupon(qrToken);
-      }
-    } else {
+    if (pin !== CASHIER_PIN) {
       setPinError('رمز غير صحيح');
+      return;
+    }
+
+    setUnlocked(true);
+    setPinError('');
+
+    // لو الدخول تم عن طريق QR، يتحقق من الكود تلقائيًا
+    if (qrToken) {
+      await checkCoupon(qrToken);
     }
   };
 
@@ -105,7 +106,7 @@ export default function CashierPage() {
 
           {qrToken && (
             <p className="text-[#B8875A] text-sm">
-              تم استقبال كود من QR
+              تم استقبال كود الكوبون من QR
             </p>
           )}
 
@@ -126,7 +127,7 @@ export default function CashierPage() {
           <button
             type="submit"
             disabled={checking}
-            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 active:scale-[0.98] transition-transform disabled:opacity-60"
+            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 disabled:opacity-60"
           >
             {checking ? 'جاري التحقق...' : 'دخول'}
           </button>
@@ -155,7 +156,7 @@ export default function CashierPage() {
           <button
             type="submit"
             disabled={checking}
-            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 active:scale-[0.98] transition-transform disabled:opacity-60"
+            className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-3.5 disabled:opacity-60"
           >
             {checking ? 'جاري التحقق...' : 'تحقق'}
           </button>
@@ -186,7 +187,7 @@ export default function CashierPage() {
                 <button
                   onClick={handleConfirm}
                   disabled={confirming}
-                  className="mt-2 w-full rounded-full bg-[#4ADE80] text-[#0F1B12] font-semibold py-3.5 active:scale-[0.98] transition-transform disabled:opacity-60"
+                  className="mt-2 w-full rounded-full bg-[#4ADE80] text-[#0F1B12] font-semibold py-3.5 disabled:opacity-60"
                 >
                   {confirming
                     ? 'جاري التأكيد...'
@@ -198,7 +199,6 @@ export default function CashierPage() {
             {result.status === 'expired' && (
               <>
                 <Clock className="w-10 h-10 text-[#B8875A]" />
-
                 <p className="text-[#B8875A] font-bold text-lg">
                   الكوبون منتهي الصلاحية
                 </p>
@@ -208,7 +208,6 @@ export default function CashierPage() {
             {result.status === 'used' && (
               <>
                 <Ticket className="w-10 h-10 text-[#B8875A]" />
-
                 <p className="text-[#B8875A] font-bold text-lg">
                   تم استخدام هذا الكوبون مسبقًا
                 </p>
@@ -218,7 +217,6 @@ export default function CashierPage() {
             {result.status === 'not_found' && (
               <>
                 <XCircle className="w-10 h-10 text-[#EF4444]" />
-
                 <p className="text-[#EF4444] font-bold text-lg">
                   كوبون غير موجود
                 </p>
