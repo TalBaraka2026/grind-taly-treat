@@ -1,7 +1,22 @@
+import { createClient } from '@base44/sdk';
+import { appParams } from '@/lib/app-params';
+
+const { appId, token, functionsVersion, appBaseUrl } = appParams;
+
+const legacyBase44 = createClient({
+  appId,
+  token,
+  functionsVersion,
+  serverUrl: 'https://grind-taly-treat.base44.app',
+  appBaseUrl,
+});
+
 const WORKER_URL =
   'https://grind-taly-coupons.talalbrkt1.workers.dev';
 
 export const base44 = {
+  ...legacyBase44,
+
   functions: {
     async invoke(name, body = {}) {
       const actionMap = {
