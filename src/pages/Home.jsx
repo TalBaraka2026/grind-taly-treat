@@ -1,76 +1,89 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import PartnershipHeader from '@/components/coupon/PartnershipHeader';
-import VenueSection from '@/components/coupon/VenueSection';
-import BottomNav from '@/components/layout/BottomNav';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-const PROMO_IMAGE =
-  'https://raw.githubusercontent.com/TalBaraka2026/grind-taly-treat/main/file_00000000455c8208bfa2b63bf6c14e3b.png';
+import { base44 } from '@/api/base44Client';
 
-export default function Home() {
-  const navigate = useNavigate();
-  const [showPromo, setShowPromo] = useState(true);
+const STORAGE_KEY = 'gh_coupon_token';
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowPromo(false);
-    }, 5000);
+const COOLDOWN_MS = 48 * 60 * 60 * 1000;
 
-    return () => clearTimeout(timer);
+export function useCoupon() {
+  const [coupon, setCoupon] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const tokenRef = useRef(null);
+
+  const activate = useCallback(async (tokenParam) => {
+    const res = await base44.functions.invoke('activateCoupon', {
+      token: tokenParam || undefined,
+    });
+
+    const data = res.data;
+
+    tokenRef.current = data.token;
+
+    localStorage.setItem(STORAGE_KEY, data.token);
+
+    setCoupon(data);
+    setError(null);
+
+    return data;
   }, []);
 
-  return (
-    <>
-      {showPromo && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setShowPromo(false)}
-        >
-          <img
-            src={PROMO_IMAGE}
-            alt="عرض خصم 15%"
-            className="w-full max-w-md rounded-3xl shadow-2xl animate-in fade-in zoom-in duration-700"
-          />
-        </div>
-      )}
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
 
-      <div className="min-h-screen bg-[#160D08] pb-24">
-        <div className="max-w-md mx-auto px-5 pt-10 flex flex-col gap-8">
-          <PartnershipHeader />
+    const urlToken = urlParams.get('token');
 
-          <div className="text-center space-y-2">
-            <p className="text-[#F3E9DC] text-2xl font-bold">
-              عرض خاص لعملاء تال البركة
-            </p>
-            <p className="text-[#E8622D] text-3xl font-bold">
-              خصم 15% لدى GRIND HOUSE
-            </p>
-            <p className="text-[#8A7862] text-sm">
-              بالتعاون مع GRIND HOUSE
-            </p>
-          </div>
+    const storedToken = localStorage.getItem(STORAGE_KEY);
 
-          <div className="flex flex-col gap-3">
-            <button
-              onClick={() => navigate('/coupon')}
-              className="w-full rounded-full bg-[#E8622D] text-white font-semibold py-4"
-            >
-              استخدم الخصم
-            </button>
+    const initialToken = urlToken || storedToken || null;
 
-            <button
-              onClick={() => navigate('/menu')}
-              className="w-full rounded-full ring-1 ring-white/15 text-[#D8C7B3] font-medium py-4"
-            >
-              عرض المنيو
-            </button>
-          </div>
+    setLoading(true);
 
-          <VenueSection />
-        </div>
+    activate(initialToken)
+      .then(async (data) => {
+        /*
+         * لو الكوبون مستخدم بالفعل:
+         * - أقل من 48 ساعة → يظل ممنوعًا
+         * - بعد 48 ساعة → إنشاء كوبون جديد
+         */
+        if (data?.status === 'used' && data?.redeemed_at) {
+          const redeemedTime = new Date(data.redeemed_at).getTime();
+          const now = Date.now();
 
-        <BottomNav />
-      </div>
-    </>
-  );
-}
+          const elapsed = now - redeemedTime;
+
+          if (elapsed >= COOLDOWN_MS) {
+            return activate(null);
+          }
+        }
+
+        return data;
+      })
+      .catch(() => {
+        // الكود غير موجود أو غير صالح → إنشاء كوبون جديد
+        localStorage.removeItem(STORAGE_KEY);
+
+        return activate(null).catch((e) => {
+          setError(e?.message || 'error');
+        });
+      })
+      .finally(() => setLoading(false));
+  }, [activate]);
+
+  const refresh = useCallback(() => {
+    if (tokenRef.current) {
+      return activate(tokenRef.current).catch(() => {});
+    }
+  }, [activate]);
+
+  return {
+    coupon,
+    loading,
+    error,
+    token: tokenRef.current,
+    refresh,
+    activate,
+  };
+                                        }
